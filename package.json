@@ -1,0 +1,25 @@
+{
+  "name": "church-live-studio",
+  "version": "1.0.0",
+  "description": "RCCG Christ The Way live production control platform",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "church",
+    "obs",
+    "socket.io",
+    "production",
+    "live-stream"
+  ],
+  "author": "Church Live Studio",
+  "license": "MIT",
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "obs-websocket-js": "^5.0.8",
+    "socket.io": "^4.8.1"
+  }
+}
