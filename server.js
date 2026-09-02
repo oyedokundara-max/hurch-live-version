@@ -42,6 +42,8 @@ const PROGRAM_STATUSES = [
   'Ended'
 ];
 
+const CAMERA_KEYS = ['camera1', 'camera2', 'camera3', 'camera4'];
+
 const state = {
   users: [],
   programStatus: 'Not Started',
@@ -55,6 +57,12 @@ const state = {
     running: false,
     startedAt: null,
     startedBy: null
+  },
+  programOutput: {
+    preview: 'camera1',
+    live: 'camera1',
+    lastAction: 'Initialized',
+    updatedAt: new Date().toISOString()
   },
   activity: [],
   obs: {
@@ -103,6 +111,7 @@ function getStatePayload() {
     urgentAlerts: [...state.urgentAlerts],
     messages: [...state.messages],
     countdown: { ...state.countdown },
+    programOutput: { ...state.programOutput },
     activity: [...state.activity].slice(-20),
     obs: {
       ...state.obs,
@@ -167,6 +176,38 @@ function syncProgramSceneToStatus(statusName) {
   if (obsClient && state.obs.connected) {
     takeObsScene(mappedName, { silent: true, source: 'program-status' });
   }
+}
+
+function getCameraLabel(cameraKey) {
+  const map = {
+    camera1: 'Camera 1',
+    camera2: 'Camera 2',
+    camera3: 'Camera 3',
+    camera4: 'Camera 4'
+  };
+  return map[cameraKey] || cameraKey;
+}
+
+function updateProgramOutput(cameraKey, action = 'Preview') {
+  const safeCamera = CAMERA_KEYS.includes(cameraKey) ? cameraKey : 'camera1';
+  state.programOutput.preview = state.programOutput.preview || 'camera1';
+  if (action === 'Take' || action === 'Cut') {
+    state.programOutput.live = safeCamera;
+    state.programOutput.preview = safeCamera;
+    state.programOutput.lastAction = `${action}: ${getCameraLabel(safeCamera)}`;
+    state.programOutput.updatedAt = new Date().toISOString();
+    addActivity('Camera taken to program', `${getCameraLabel(safeCamera)} (${action})`);
+  } else {
+    state.programOutput.preview = safeCamera;
+    state.programOutput.lastAction = `Preview: ${getCameraLabel(safeCamera)}`;
+    state.programOutput.updatedAt = new Date().toISOString();
+  }
+
+  if (state.programOutput.preview && !CAMERA_KEYS.includes(state.programOutput.preview)) {
+    state.programOutput.preview = 'camera1';
+  }
+
+  broadcastState();
 }
 
 async function updateObsState() {
@@ -421,8 +462,24 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+app.get('/director', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'director.html'));
+});
+
 app.get('/director.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'director.html'));
+});
+
+app.get('/control-room', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'director.html'));
+});
+
+app.get('/obs-output', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'obs-output.html'));
+});
+
+app.get('/obs-output.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'obs-output.html'));
 });
 
 app.get('/director/session', (req, res) => {
@@ -454,6 +511,10 @@ app.post('/director/logout', (req, res) => {
 
 app.get('/api/state', (req, res) => {
   res.json(getStatePayload());
+});
+
+app.get('/api/program-state', (req, res) => {
+  res.json({ programOutput: state.programOutput });
 });
 
 app.post('/api/obs/connect', async (req, res) => {
@@ -669,15 +730,38 @@ io.on('connection', (socket) => {
     socket.emit('obs:scene:result', result);
   });
 
+  socket.on('program:preview:set', (payload) => {
+    const selectedKey = sanitizeText(payload?.cameraKey || '', 'camera1');
+    updateProgramOutput(selectedKey, 'Preview');
+    socket.emit('program:state', getStatePayload().programOutput);
+  });
+
+  socket.on('program:take', (payload) => {
+    const selectedKey = sanitizeText(payload?.cameraKey || '', 'camera1');
+    updateProgramOutput(selectedKey, 'Take');
+    socket.emit('program:state', getStatePayload().programOutput);
+  });
+
+  socket.on('program:cut', (payload) => {
+    const selectedKey = sanitizeText(payload?.cameraKey || '', 'camera1');
+    updateProgramOutput(selectedKey, 'Cut');
+    socket.emit('program:state', getStatePayload().programOutput);
+  });
+
   socket.on('camera:take', async (payload) => {
     const cameraKey = sanitizeText(payload?.cameraKey || '', 'camera1');
-    const mapName = state.obs.cameraMappings[cameraKey];
+    const safeKey = CAMERA_KEYS.includes(cameraKey) ? cameraKey : 'camera1';
+    const mapName = state.obs.cameraMappings[safeKey];
     if (!mapName) {
-      socket.emit('error:message', { message: 'No OBS mapping has been configured for this camera.' });
+      updateProgramOutput(safeKey, 'Take');
+      socket.emit('camera:result', { ok: true, message: `Preview set to ${getCameraLabel(safeKey)}. Configure an OBS mapping to send it to OBS.` });
       return;
     }
 
     const result = await takeObsScene(mapName, { silent: false });
+    if (result.ok) {
+      updateProgramOutput(safeKey, 'Take');
+    }
     socket.emit('camera:result', result);
   });
 
