@@ -11,7 +11,7 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 const DIRECTOR_PASSWORD = process.env.DIRECTOR_PASSWORD || 'change-me';
 
 const DEPARTMENTS = [
@@ -456,10 +456,22 @@ function ensureUserPayload(payload = {}) {
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+
+// Serve frontend assets from the public folder, with a root fallback for non-public files.
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(__dirname));
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('*', (req, res, next) => {
+  const entryFile = path.join(__dirname, 'public', 'index.html');
+  res.sendFile(entryFile, (error) => {
+    if (error) {
+      next(error);
+    }
+  });
 });
 
 app.get('/director', (req, res) => {
