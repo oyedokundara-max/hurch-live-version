@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="refresh" content="0; url=/director">
+  <title>Church Live Studio</title>
+  <script>
+    window.location.href = "/director";
+  </script>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      background-color: #121212;
+      color: #ffffff;
+    }
+    .card {
+      text-align: center;
+      padding: 2.5rem;
+      border-radius: 12px;
+      background: #1e1e1e;
+      border: 1px solid #333;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      max-width: 400px;
+      width: 90%;
+    }
+    h1 {
+      margin-top: 0;
+      font-size: 1.5rem;
+      color: #f3f4f6;
+    }
+    p {
+      color: #9ca3af;
+      font-size: 0.95rem;
+    }
+    .links {
+      margin-top: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    a {
+      display: block;
+      padding: 10px 16px;
+      background-color: #2563eb;
+      color: #ffffff;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+    a:hover {
+      background-color: #1d4ed8;
+    }
+    a.secondary {
+      background-color: #374151;
+    }
+    a.secondary:hover {
+      background-color: #4b5563;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Church Live Studio</h1>
+    <p>Redirecting you to the Director Control Room...</p>
+    <div class="links">
+      <a href="/director">Go to Director Panel</a>
+      <a href="/obs-output" class="secondary">Go to OBS Output Feed</a>
+    </div>
+  </div>
+</body>
+</html>
