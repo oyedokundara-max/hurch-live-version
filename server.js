@@ -2,321 +2,267 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
-const socketIo = require('socket.io');
-const dotenv = require('dotenv');
-const cookieParser = require('cookie-parser');
-const OBSWebSocket = require('obs-websocket-js');
-
-dotenv.config();
+const { Server } = require('socket.io');
+const OBSWebSocket = require('obs-websocket-js').default || require('obs-websocket-js');
+require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server);
-const PORT = process.env.PORT || 10000;
-const DIRECTOR_PASSWORD = process.env.DIRECTOR_PASSWORD || 'change-me';
+const io = new Server(server, { cors: { origin: '*' } });
+const obs = new OBSWebSocket();
 
-const DEPARTMENTS = [
-  'Director',
-  'Camera',
-  'Audio',
-  'Projection',
-  'Streaming',
-  'Media',
-  'Lighting',
-  'Technical',
-  'Other'
-];
+const PORT = process.env.PORT || 3000;
+const DIRECTOR_PASSWORD = process.env.DIRECTOR_PASSWORD || 'rccgdirector2026';
 
-const PROGRAM_STATUSES = [
-  'Not Started',
-  'Preparation',
-  'Sound Check',
-  'Camera Check',
-  'Countdown',
-  'Live',
-  'Worship',
-  'Sermon',
-  'Prayer',
-  'Offering',
-  'Announcements',
-  'Closing',
-  'Ended'
-];
-
-const CAMERA_KEYS = ['camera1', 'camera2', 'camera3', 'camera4'];
-
+// Global Production State
 const state = {
-  users: [],
   programStatus: 'Not Started',
-  announcement: null,
+  countdown: { targetTime: null, active: false, remaining: 0 },
+  previewCamera: 'camera1',
+  liveCamera: 'camera1',
+  cameraMap: {
+    camera1: 'Camera 1',
+    camera2: 'Camera 2',
+    camera3: 'Camera 3',
+    camera4: 'Camera 4'
+  },
+  announcement: '',
   instructions: [],
-  urgentAlerts: [],
+  urgentAlert: null,
   messages: [],
-  countdown: {
-    duration: 60,
-    remaining: 60,
-    running: false,
-    startedAt: null,
-    startedBy: null
-  },
-  programOutput: {
-    preview: 'camera1',
-    live: 'camera1',
-    lastAction: 'Initialized',
-    updatedAt: new Date().toISOString()
-  },
-  activity: [],
+  activityLog: [],
+  connectedUsers: {},
   obs: {
     connected: false,
-    host: process.env.OBS_HOST || '',
-    port: process.env.OBS_PORT || '',
-    password: process.env.OBS_PASSWORD || '',
-    previewUrl: process.env.OBS_PREVIEW_URL || '',
-    currentScene: 'Unknown',
-    previewScene: null,
-    streamState: 'offline',
-    recordingState: 'off',
-    scenes: [],
-    transitions: [],
-    sources: [],
-    currentTransition: '',
-    lastError: '',
-    cameraMappings: {
-      camera1: '',
-      camera2: '',
-      camera3: '',
-      camera4: ''
-    },
-    sceneMappings: {
-      Worship: '',
-      Sermon: '',
-      Prayer: '',
-      Offering: '',
-      Announcements: '',
-      Closing: ''
-    },
-    autoSceneSwitch: true,
-    connectedAt: null
+    currentScene: '',
+    streaming: false,
+    recording: false,
+    scenes: []
   }
 };
 
-let obsClient = null;
-
-function getStatePayload() {
-  return {
-    users: [...state.users],
-    programStatus: state.programStatus,
-    announcement: state.announcement,
-    instructions: [...state.instructions],
-    urgentAlerts: [...state.urgentAlerts],
-    messages: [...state.messages],
-    countdown: { ...state.countdown },
-    programOutput: { ...state.programOutput },
-    activity: [...state.activity].slice(-20),
-    obs: {
-      ...state.obs,
-      host: state.obs.host || 'Not configured',
-      port: state.obs.port || 'Not configured',
-      connected: !!state.obs.connected,
-      streamState: state.obs.streamState || 'offline',
-      recordingState: state.obs.recordingState || 'off',
-      currentScene: state.obs.currentScene || 'Unknown',
-      previewScene: state.obs.previewScene || null,
-      lastError: state.obs.lastError || ''
-    },
-    departments: DEPARTMENTS,
-    programStatuses: PROGRAM_STATUSES
-  };
+function logActivity(text) {
+  const entry = { time: new Date().toLocaleTimeString(), text };
+  state.activityLog.unshift(entry);
+  if (state.activityLog.length > 50) state.activityLog.pop();
+  io.emit('activity:new', entry);
 }
 
-function addActivity(event, details = '') {
-  state.activity.push({
-    id: Date.now() + Math.random().toString(16).slice(2),
-    event,
-    details,
-    timestamp: new Date().toISOString()
-  });
-  if (state.activity.length > 60) {
-    state.activity = state.activity.slice(-60);
-  }
-}
+// Serve Static Files
+app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
 
-function broadcastState() {
-  io.emit('state:update', getStatePayload());
-}
-
-function sanitizeText(value, fallback = '') {
-  if (typeof value !== 'string') return fallback;
-  const trimmed = value.trim();
-  return trimmed || fallback;
-}
-
-function getEntryPoint() {
-  const possiblePaths = [
-    path.join(__dirname, 'index.html'),
-    path.join(__dirname, 'public', 'index.html'),
-    path.join(__dirname, 'live', 'index.html')
-  ];
-
-  for (const filePath of possiblePaths) {
-    if (fs.existsSync(filePath)) {
-      return filePath;
-    }
-  }
-  return null;
-}
-
-function getHTMLPage(pageName) {
-  const possiblePaths = [
-    path.join(__dirname, 'public', pageName),
-    path.join(__dirname, pageName)
-  ];
-
-  for (const filePath of possiblePaths) {
-    if (fs.existsSync(filePath)) {
-      return filePath;
-    }
-  }
-  return null;
-}
-
-// Middleware
-app.use(express.json({ limit: '2mb' }));
-app.use(express.urlencoded({ extended: true }));
-app.use(cookieParser());
-
-// Static file serving
-if (fs.existsSync(path.join(__dirname, 'public'))) {
-  app.use(express.static(path.join(__dirname, 'public')));
-}
-app.use(express.static(__dirname));
-
-// --- SPECIFIC ROUTES FIRST ---
-app.get('/director', (req, res) => {
-  const page = getHTMLPage('director.html');
-  if (page) return res.sendFile(page);
-  res.status(404).send('director.html not found.');
+// Explicit Route Handlers
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.get('/control-room', (req, res) => {
-  const page = getHTMLPage('director.html');
-  if (page) return res.sendFile(page);
-  res.status(404).send('director.html not found.');
+app.get('/director', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'director.html'));
 });
 
 app.get('/obs-output', (req, res) => {
-  const page = getHTMLPage('obs-output.html');
-  if (page) return res.sendFile(page);
-  res.status(404).send('obs-output.html not found.');
+  res.sendFile(path.join(__dirname, 'public', 'obs-output.html'));
 });
 
-app.get('/director/session', (req, res) => {
-  const authorized = req.cookies.directorAuth === 'true';
-  res.json({ authorized, hasPassword: Boolean(DIRECTOR_PASSWORD) });
-});
-
-app.post('/director/login', (req, res) => {
-  const enteredPassword = sanitizeText(req.body.password || '', '');
-
-  if (!enteredPassword || enteredPassword !== DIRECTOR_PASSWORD) {
-    return res.status(401).json({ success: false, message: 'Invalid director password.' });
+// Authentication Endpoint
+app.post('/api/director/login', (req, res) => {
+  const { password } = req.body;
+  if (password === DIRECTOR_PASSWORD) {
+    res.json({ success: true });
+  } else {
+    res.status(401).json({ success: false, message: 'Invalid password' });
   }
-
-  res.cookie('directorAuth', 'true', {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: false,
-    maxAge: 60 * 60 * 1000
-  });
-
-  return res.json({ success: true, message: 'Director access granted.' });
 });
 
-app.post('/director/logout', (req, res) => {
-  res.clearCookie('directorAuth');
-  res.json({ success: true });
-});
+// OBS Integration Logic
+async function connectOBS(url, password) {
+  try {
+    const wsUrl = url || process.env.OBS_WEBSOCKET_URL;
+    const wsPassword = password !== undefined ? password : process.env.OBS_WEBSOCKET_PASSWORD;
+    if (!wsUrl) return;
 
-app.get('/api/state', (req, res) => {
-  res.json(getStatePayload());
-});
+    await obs.connect(wsUrl, wsPassword);
+    state.obs.connected = true;
+    logActivity('OBS WebSocket connected successfully');
 
-app.get('/api/program-state', (req, res) => {
-  res.json({ programOutput: state.programOutput });
-});
+    // Fetch initial scenes
+    const sceneList = await obs.call('GetSceneList');
+    state.obs.scenes = sceneList.scenes.map(s => s.sceneName);
+    state.obs.currentScene = sceneList.currentProgramSceneName;
 
-// --- CATCH-ALL ROUTE LAST ---
-app.get('*', (req, res) => {
-  const entryPath = getEntryPoint();
-  if (entryPath) {
-    return res.sendFile(entryPath);
+    const streamStatus = await obs.call('GetStreamStatus');
+    state.obs.streaming = streamStatus.outputActive;
+
+    const recordStatus = await obs.call('GetRecordStatus');
+    state.obs.recording = recordStatus.outputActive;
+
+    io.emit('state:update', state);
+  } catch (err) {
+    state.obs.connected = false;
+    logActivity(`OBS Connection Error: ${err.message}`);
+    io.emit('state:update', state);
   }
-  res.status(404).send('Main index.html file not found.');
-});
+}
 
-// Socket.IO Handlers
-io.on('connection', (socket) => {
-  socket.emit('state:update', getStatePayload());
-
-  socket.on('join:team', (payload) => {
-    const name = sanitizeText(payload?.name || '', '');
-    const department = sanitizeText(payload?.department || '', 'Other');
-
-    if (!name) {
-      return socket.emit('error:message', { message: 'A name is required.' });
+// OBS Event Listeners
+obs.on('CurrentProgramSceneChanged', data => {
+  state.obs.currentScene = data.sceneName;
+  // Reverse lookup camera if matched
+  for (const [key, name] of Object.entries(state.cameraMap)) {
+    if (name === data.sceneName) {
+      state.liveCamera = key;
+      break;
     }
+  }
+  logActivity(`OBS Program Scene Changed: ${data.sceneName}`);
+  io.emit('state:update', state);
+});
 
-    const user = {
-      socketId: socket.id,
-      name,
-      department,
-      connected: true,
-      joinedAt: new Date().toISOString()
+obs.on('StreamStateChanged', data => {
+  state.obs.streaming = data.outputActive;
+  logActivity(`Stream state changed: ${data.outputActive ? 'LIVE' : 'OFFLINE'}`);
+  io.emit('state:update', state);
+});
+
+obs.on('RecordStateChanged', data => {
+  state.obs.recording = data.outputActive;
+  logActivity(`Recording state changed: ${data.outputActive ? 'RECORDING' : 'OFF'}`);
+  io.emit('state:update', state);
+});
+
+// Socket.IO Connection Handler
+io.on('connection', (socket) => {
+  socket.emit('state:update', state);
+
+  socket.on('user:join', (data) => {
+    state.connectedUsers[socket.id] = {
+      id: socket.id,
+      name: data.name || 'Anonymous',
+      department: data.department || 'Other',
+      joinedAt: new Date().toLocaleTimeString()
     };
-
-    state.users.push(user);
-    addActivity('User joined', `${name} (${department}) joined.`);
-    broadcastState();
+    logActivity(`${data.name} (${data.department}) joined the production session`);
+    io.emit('state:update', state);
   });
 
-  socket.on('send:message', (payload) => {
-    const messageText = sanitizeText(payload?.message || '', '');
-    if (!messageText) return;
-
-    const sender = state.users.find((m) => m.socketId === socket.id);
-    state.messages.push({
-      id: Date.now().toString(16),
-      sender: sender ? sender.name : 'Unknown',
-      department: sender ? sender.department : 'Other',
-      message: messageText,
-      timestamp: new Date().toISOString()
-    });
-    broadcastState();
+  socket.on('director:set-status', (status) => {
+    state.programStatus = status;
+    logActivity(`Program status updated: ${status}`);
+    io.emit('state:update', state);
   });
 
-  socket.on('send:announcement', (payload) => {
-    const text = sanitizeText(payload?.text || '', '');
-    if (!text) return;
+  socket.on('director:preview-camera', (camKey) => {
+    state.previewCamera = camKey;
+    io.emit('state:update', state);
+  });
 
-    state.announcement = {
-      id: Date.now().toString(16),
+  socket.on('director:take-live', async () => {
+    state.liveCamera = state.previewCamera;
+    logActivity(`TAKE LIVE: ${state.liveCamera.toUpperCase()}`);
+    io.emit('state:update', state);
+
+    if (state.obs.connected) {
+      const targetScene = state.cameraMap[state.liveCamera];
+      if (targetScene) {
+        try {
+          await obs.call('SetCurrentProgramScene', { sceneName: targetScene });
+        } catch (err) {
+          logActivity(`OBS Switch Failed: ${err.message}`);
+        }
+      }
+    }
+  });
+
+  socket.on('director:cut-live', async (camKey) => {
+    state.previewCamera = camKey;
+    state.liveCamera = camKey;
+    logActivity(`CUT LIVE: ${camKey.toUpperCase()}`);
+    io.emit('state:update', state);
+
+    if (state.obs.connected) {
+      const targetScene = state.cameraMap[camKey];
+      if (targetScene) {
+        try {
+          await obs.call('SetCurrentProgramScene', { sceneName: targetScene });
+        } catch (err) {
+          logActivity(`OBS Switch Failed: ${err.message}`);
+        }
+      }
+    }
+  });
+
+  socket.on('director:announcement', (text) => {
+    state.announcement = text;
+    logActivity(`Announcement sent: "${text}"`);
+    io.emit('state:update', state);
+  });
+
+  socket.on('director:instruction', (data) => {
+    const item = {
+      id: Date.now(),
+      department: data.department,
+      text: data.text,
+      time: new Date().toLocaleTimeString(),
+      acknowledgements: []
+    };
+    state.instructions.unshift(item);
+    logActivity(`Instruction to ${data.department}: "${data.text}"`);
+    io.emit('state:update', state);
+  });
+
+  socket.on('team:acknowledge', (instructionId) => {
+    const user = state.connectedUsers[socket.id];
+    if (!user) return;
+    const inst = state.instructions.find(i => i.id === instructionId);
+    if (inst && !inst.acknowledgements.some(a => a.userId === socket.id)) {
+      inst.acknowledgements.push({
+        userId: socket.id,
+        name: user.name,
+        department: user.department,
+        time: new Date().toLocaleTimeString()
+      });
+      logActivity(`${user.name} acknowledged instruction #${instructionId}`);
+      io.emit('state:update', state);
+    }
+  });
+
+  socket.on('director:urgent-alert', (text) => {
+    state.urgentAlert = text ? { text, time: new Date().toLocaleTimeString() } : null;
+    logActivity(text ? `URGENT ALERT: ${text}` : 'Urgent alert cleared');
+    io.emit('state:update', state);
+  });
+
+  socket.on('team:message', (text) => {
+    const user = state.connectedUsers[socket.id] || { name: 'Anonymous', department: 'Other' };
+    const msg = {
+      id: Date.now(),
+      sender: user.name,
+      department: user.department,
       text,
-      timestamp: new Date().toISOString()
+      time: new Date().toLocaleTimeString()
     };
-    addActivity('Announcement updated', text);
-    broadcastState();
+    state.messages.unshift(msg);
+    logActivity(`Message from ${user.name}: "${text}"`);
+    io.emit('state:update', state);
+  });
+
+  socket.on('obs:config', (data) => {
+    connectOBS(data.url, data.password);
   });
 
   socket.on('disconnect', () => {
-    const index = state.users.findIndex((m) => m.socketId === socket.id);
-    if (index >= 0) {
-      const removed = state.users.splice(index, 1)[0];
-      addActivity('User disconnected', `${removed.name} disconnected.`);
-      broadcastState();
+    const user = state.connectedUsers[socket.id];
+    if (user) {
+      logActivity(`${user.name} disconnected`);
+      delete state.connectedUsers[socket.id];
+      io.emit('state:update', state);
     }
   });
 });
 
+// Start Server & Attempt Automatic OBS Connection
 server.listen(PORT, () => {
-  console.log(`CHURCH LIVE STUDIO server running on port ${PORT}`);
+  console.log(`CHURCH LIVE STUDIO running at http://localhost:${PORT}`);
+  connectOBS();
 });
