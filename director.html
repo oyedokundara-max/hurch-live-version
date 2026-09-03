@@ -3,130 +3,173 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Director Control Panel | Church Live Studio</title>
+  <title>Director Control Room | Church Live Studio</title>
+  <link rel="stylesheet" href="style.css">
   <script src="/socket.io/socket.io.js"></script>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #0f172a;
-      color: #f8fafc;
-      padding: 20px;
-    }
-    .header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding-bottom: 20px;
-      border-bottom: 1px solid #334155;
-      margin-bottom: 20px;
-    }
-    .status-badge {
-      padding: 6px 12px;
-      border-radius: 20px;
-      font-size: 0.85rem;
-      font-weight: 600;
-      background: #334155;
-    }
-    .status-badge.live { background: #dc2626; color: #fff; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 20px;
-    }
-    .card {
-      background: #1e293b;
-      border: 1px solid #334155;
-      border-radius: 8px;
-      padding: 16px;
-    }
-    .card h2 { font-size: 1.1rem; margin-bottom: 12px; color: #94a3b8; }
-    .display-box {
-      font-size: 1.5rem;
-      font-weight: 700;
-      padding: 12px;
-      border-radius: 6px;
-      text-align: center;
-      background: #0f172a;
-    }
-    .display-box.live { color: #ef4444; border: 2px solid #ef4444; }
-    .display-box.preview { color: #3b82f6; border: 2px solid #3b82f6; }
-    .btn-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-      margin-top: 15px;
-    }
-    button {
-      padding: 12px;
-      border: none;
-      border-radius: 6px;
-      font-weight: 600;
-      cursor: pointer;
-      background: #3b82f6;
-      color: #fff;
-      transition: background 0.2s;
-    }
-    button:hover { background: #2563eb; }
-    button.take { background: #dc2626; grid-column: span 2; font-size: 1.1rem; }
-    button.take:hover { background: #b91c1c; }
-  </style>
 </head>
-<body>
-  <div class="header">
-    <h1>Director Panel</h1>
-    <span id="obs-status" class="status-badge">OBS Disconnected</span>
+<body class="director-body">
+  <!-- Authentication Overlay -->
+  <div id="auth-modal" class="modal-overlay">
+    <div class="modal-card">
+      <h2>DIRECTOR CONTROL ROOM</h2>
+      <p>Enter password to unlock director authority</p>
+      <form id="auth-form">
+        <div class="form-group">
+          <input type="password" id="auth-password" placeholder="Director Password" required>
+        </div>
+        <button type="submit" class="btn btn-gold full-width">Authenticate</button>
+      </form>
+      <p id="auth-error" class="text-red hidden" style="margin-top:10px;">Invalid Password</p>
+    </div>
   </div>
 
-  <div class="grid">
-    <div class="card">
-      <h2>PROGRAM (LIVE)</h2>
-      <div id="live-display" class="display-box live">CAMERA 1</div>
+  <!-- Header Bar -->
+  <div class="app-header">
+    <div class="header-brand">
+      <h1>DIRECTOR CONTROL ROOM</h1>
+      <span class="sub-brand">RCCG Christ The Way</span>
     </div>
-
-    <div class="card">
-      <h2>PREVIEW</h2>
-      <div id="preview-display" class="display-box preview">CAMERA 1</div>
+    <div class="header-status">
+      <span id="live-clock" class="clock">00:00:00</span>
+      <span id="obs-badge" class="badge badge-offline">OBS OFFLINE</span>
     </div>
+  </div>
 
-    <div class="card" style="grid-column: 1 / -1;">
-      <h2>CAMERA SELECT</h2>
-      <div class="btn-grid">
-        <button onclick="selectCamera('camera1')">Camera 1</button>
-        <button onclick="selectCamera('camera2')">Camera 2</button>
-        <button onclick="selectCamera('camera3')">Camera 3</button>
-        <button onclick="selectCamera('camera4')">Camera 4</button>
-        <button class="take" onclick="takeLive()">TAKE LIVE</button>
+  <div class="container director-grid">
+    <!-- OBS Output Link Sharing Box -->
+    <div class="card col-full flex-between-center highlight-border">
+      <div>
+        <strong>OBS BROWSER SOURCE LINK:</strong>
+        <code id="obs-url-display" class="code-link">http://.../obs-output</code>
+      </div>
+      <div class="flex-row gap-10">
+        <button id="copy-obs-link" class="btn btn-secondary">Copy Link</button>
+        <a id="open-obs-link" href="/obs-output" target="_blank" class="btn btn-primary">Open OBS Page</a>
       </div>
     </div>
+
+    <!-- Monitors (Preview vs Program) -->
+    <div class="card col-2">
+      <h2>PREVIEW MONITOR</h2>
+      <div class="monitor-wrapper aspect-16-9 preview-border">
+        <div id="preview-display" class="feed-placeholder">
+          <div id="preview-cam-label" class="feed-title text-blue">CAMERA 1</div>
+          <span class="preview-badge">PREVIEW</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card col-2">
+      <h2>PROGRAM MONITOR (LIVE)</h2>
+      <div class="monitor-wrapper aspect-16-9 live-border">
+        <div id="program-display" class="feed-placeholder">
+          <div id="program-cam-label" class="feed-title text-red">CAMERA 1</div>
+          <span class="live-indicator">● LIVE</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Camera Matrix & Transition Controls -->
+    <div class="card col-full">
+      <h2>CAMERA MATRIX & TRANSITION CONTROL</h2>
+      <div class="camera-grid">
+        <button class="cam-btn" onclick="selectPreview('camera1')">CAMERA 1</button>
+        <button class="cam-btn" onclick="selectPreview('camera2')">CAMERA 2</button>
+        <button class="cam-btn" onclick="selectPreview('camera3')">CAMERA 3</button>
+        <button class="cam-btn" onclick="selectPreview('camera4')">CAMERA 4</button>
+      </div>
+      <div class="flex-row gap-20 margin-top-15">
+        <button id="btn-take" class="btn btn-take flex-1">TAKE (TRANSITION TO LIVE)</button>
+        <button id="btn-cut" class="btn btn-cut">CUT DIRECT</button>
+      </div>
+    </div>
+
+    <!-- Program Status & Communication Controls -->
+    <div class="card col-2">
+      <h2>PROGRAM STATUS CONTROL</h2>
+      <div class="form-group">
+        <select id="status-select" class="full-width">
+          <option value="Not Started">Not Started</option>
+          <option value="Preparation">Preparation</option>
+          <option value="Sound Check">Sound Check</option>
+          <option value="Camera Check">Camera Check</option>
+          <option value="Live">Live</option>
+          <option value="Worship">Worship</option>
+          <option value="Sermon">Sermon</option>
+          <option value="Prayer">Prayer</option>
+          <option value="Offering">Offering</option>
+          <option value="Announcements">Announcements</option>
+          <option value="Closing">Closing</option>
+          <option value="Ended">Ended</option>
+        </select>
+      </div>
+      <button id="btn-update-status" class="btn btn-primary full-width">Update Program Status</button>
+    </div>
+
+    <div class="card col-2">
+      <h2>URGENT ALERTS & ANNOUNCEMENTS</h2>
+      <form id="urgent-form" class="margin-bottom-10">
+        <div class="flex-row gap-10">
+          <input type="text" id="urgent-input" placeholder="Type urgent alert message..." class="flex-1" required>
+          <button type="submit" class="btn btn-danger">SEND ALERT</button>
+          <button type="button" id="btn-clear-alert" class="btn btn-secondary">Clear</button>
+        </div>
+      </form>
+      <form id="announcement-form">
+        <div class="flex-row gap-10">
+          <input type="text" id="announcement-input" placeholder="Broadcast general announcement..." class="flex-1" required>
+          <button type="submit" class="btn btn-gold">Announce</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Targeted Department Instructions -->
+    <div class="card col-2">
+      <h2>DEPARTMENT INSTRUCTIONS</h2>
+      <form id="instruction-form">
+        <div class="form-group">
+          <select id="inst-dept" required>
+            <option value="Everyone">Everyone</option>
+            <option value="Camera">Camera</option>
+            <option value="Audio">Audio</option>
+            <option value="Projection">Projection</option>
+            <option value="Streaming">Streaming</option>
+            <option value="Media">Media</option>
+            <option value="Lighting">Lighting</option>
+            <option value="Technical">Technical</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <input type="text" id="inst-text" placeholder="Enter explicit instruction..." required>
+        </div>
+        <button type="submit" class="btn btn-primary full-width">Send Instruction</button>
+      </form>
+      <div id="director-inst-list" class="instructions-container margin-top-10"></div>
+    </div>
+
+    <!-- OBS Connection Configuration -->
+    <div class="card col-2">
+      <h2>OBS WEBSOCKET CONFIGURATION</h2>
+      <form id="obs-config-form">
+        <div class="form-group">
+          <label>WebSocket Host URL</label>
+          <input type="text" id="obs-url" placeholder="ws://127.0.0.1:4455" required>
+        </div>
+        <div class="form-group">
+          <label>WebSocket Password</label>
+          <input type="password" id="obs-pass" placeholder="Password (if enabled)">
+        </div>
+        <button type="submit" class="btn btn-secondary full-width">Connect to OBS</button>
+      </form>
+    </div>
+
+    <!-- Activity Log -->
+    <div class="card col-full">
+      <h2>PRODUCTION ACTIVITY LOG</h2>
+      <div id="activity-log" class="activity-log"></div>
+    </div>
   </div>
 
-  <script>
-    const socket = io();
-    let selectedPreview = 'camera1';
-
-    socket.on('state:update', (state) => {
-      document.getElementById('live-display').textContent = state.programOutput.live.toUpperCase();
-      document.getElementById('preview-display').textContent = state.programOutput.preview.toUpperCase();
-      
-      const statusBadge = document.getElementById('obs-status');
-      if (state.obs.connected) {
-        statusBadge.textContent = 'OBS Connected';
-        statusBadge.classList.add('live');
-      } else {
-        statusBadge.textContent = 'OBS Disconnected';
-        statusBadge.classList.remove('live');
-      }
-    });
-
-    function selectCamera(camKey) {
-      selectedPreview = camKey;
-      document.getElementById('preview-display').textContent = camKey.toUpperCase();
-    }
-
-    function takeLive() {
-      socket.emit('take:camera', { camera: selectedPreview });
-    }
-  </script>
+  <script src="director.js"></script>
 </body>
 </html>
