@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Director Control Panel | Church Live Studio</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 20px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #334155;
+      margin-bottom: 20px;
+    }
+    .status-badge {
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      background: #334155;
+    }
+    .status-badge.live { background: #dc2626; color: #fff; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+    }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .card h2 { font-size: 1.1rem; margin-bottom: 12px; color: #94a3b8; }
+    .display-box {
+      font-size: 1.5rem;
+      font-weight: 700;
+      padding: 12px;
+      border-radius: 6px;
+      text-align: center;
+      background: #0f172a;
+    }
+    .display-box.live { color: #ef4444; border: 2px solid #ef4444; }
+    .display-box.preview { color: #3b82f6; border: 2px solid #3b82f6; }
+    .btn-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 15px;
+    }
+    button {
+      padding: 12px;
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      background: #3b82f6;
+      color: #fff;
+      transition: background 0.2s;
+    }
+    button:hover { background: #2563eb; }
+    button.take { background: #dc2626; grid-column: span 2; font-size: 1.1rem; }
+    button.take:hover { background: #b91c1c; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Director Panel</h1>
+    <span id="obs-status" class="status-badge">OBS Disconnected</span>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>PROGRAM (LIVE)</h2>
+      <div id="live-display" class="display-box live">CAMERA 1</div>
+    </div>
+
+    <div class="card">
+      <h2>PREVIEW</h2>
+      <div id="preview-display" class="display-box preview">CAMERA 1</div>
+    </div>
+
+    <div class="card" style="grid-column: 1 / -1;">
+      <h2>CAMERA SELECT</h2>
+      <div class="btn-grid">
+        <button onclick="selectCamera('camera1')">Camera 1</button>
+        <button onclick="selectCamera('camera2')">Camera 2</button>
+        <button onclick="selectCamera('camera3')">Camera 3</button>
+        <button onclick="selectCamera('camera4')">Camera 4</button>
+        <button class="take" onclick="takeLive()">TAKE LIVE</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const socket = io();
+    let selectedPreview = 'camera1';
+
+    socket.on('state:update', (state) => {
+      document.getElementById('live-display').textContent = state.programOutput.live.toUpperCase();
+      document.getElementById('preview-display').textContent = state.programOutput.preview.toUpperCase();
+      
+      const statusBadge = document.getElementById('obs-status');
+      if (state.obs.connected) {
+        statusBadge.textContent = 'OBS Connected';
+        statusBadge.classList.add('live');
+      } else {
+        statusBadge.textContent = 'OBS Disconnected';
+        statusBadge.classList.remove('live');
+      }
+    });
+
+    function selectCamera(camKey) {
+      selectedPreview = camKey;
+      document.getElementById('preview-display').textContent = camKey.toUpperCase();
+    }
+
+    function takeLive() {
+      socket.emit('take:camera', { camera: selectedPreview });
+    }
+  </script>
+</body>
+</html>
