@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
 const socketIo = require('socket.io');
 const dotenv = require('dotenv');
 const cookieParser = require('cookie-parser');
@@ -100,7 +101,6 @@ const state = {
 };
 
 let obsClient = null;
-let obsConnectionTimer = null;
 
 function getStatePayload() {
   return {
@@ -142,8 +142,7 @@ function addActivity(event, details = '') {
 }
 
 function broadcastState() {
-  const payload = getStatePayload();
-  io.emit('state:update', payload);
+  io.emit('state:update', getStatePayload());
 }
 
 function sanitizeText(value, fallback = '') {
@@ -152,346 +151,63 @@ function sanitizeText(value, fallback = '') {
   return trimmed || fallback;
 }
 
-function updateCountdownClock() {
-  if (!state.countdown.running) return;
-  const timestamp = Date.now();
-  const elapsedSeconds = Math.floor((timestamp - (state.countdown.startedAt || timestamp)) / 1000);
-  const remaining = Math.max(0, state.countdown.duration - elapsedSeconds);
+function getEntryPoint() {
+  const possiblePaths = [
+    path.join(__dirname, 'index.html'),
+    path.join(__dirname, 'public', 'index.html'),
+    path.join(__dirname, 'live', 'index.html')
+  ];
 
-  state.countdown.remaining = remaining;
-  if (remaining <= 0) {
-    state.countdown.running = false;
-    addActivity('Countdown completed', `Duration reached: ${state.countdown.duration}s`);
-  }
-  broadcastState();
-}
-
-setInterval(updateCountdownClock, 1000);
-
-function syncProgramSceneToStatus(statusName) {
-  if (!state.obs.autoSceneSwitch) return;
-  const mappedName = state.obs.sceneMappings[statusName];
-  if (!mappedName) return;
-
-  if (obsClient && state.obs.connected) {
-    takeObsScene(mappedName, { silent: true, source: 'program-status' });
-  }
-}
-
-function getCameraLabel(cameraKey) {
-  const map = {
-    camera1: 'Camera 1',
-    camera2: 'Camera 2',
-    camera3: 'Camera 3',
-    camera4: 'Camera 4'
-  };
-  return map[cameraKey] || cameraKey;
-}
-
-function updateProgramOutput(cameraKey, action = 'Preview') {
-  const safeCamera = CAMERA_KEYS.includes(cameraKey) ? cameraKey : 'camera1';
-  state.programOutput.preview = state.programOutput.preview || 'camera1';
-  if (action === 'Take' || action === 'Cut') {
-    state.programOutput.live = safeCamera;
-    state.programOutput.preview = safeCamera;
-    state.programOutput.lastAction = `${action}: ${getCameraLabel(safeCamera)}`;
-    state.programOutput.updatedAt = new Date().toISOString();
-    addActivity('Camera taken to program', `${getCameraLabel(safeCamera)} (${action})`);
-  } else {
-    state.programOutput.preview = safeCamera;
-    state.programOutput.lastAction = `Preview: ${getCameraLabel(safeCamera)}`;
-    state.programOutput.updatedAt = new Date().toISOString();
-  }
-
-  if (state.programOutput.preview && !CAMERA_KEYS.includes(state.programOutput.preview)) {
-    state.programOutput.preview = 'camera1';
-  }
-
-  broadcastState();
-}
-
-async function updateObsState() {
-  try {
-    const hasObs = !!obsClient && state.obs.connected;
-    if (!hasObs) {
-      state.obs.currentScene = 'Unknown';
-      state.obs.streamState = 'offline';
-      state.obs.recordingState = 'off';
-      state.obs.scenes = [];
-      state.obs.transitions = [];
-      state.obs.sources = [];
-      return;
+  for (const filePath of possiblePaths) {
+    if (fs.existsSync(filePath)) {
+      return filePath;
     }
-
-    const [sceneList, transitionList, streamStatus, recordStatus] = await Promise.all([
-      obsClient.call('GetSceneList').catch(() => ({ scenes: [] })),
-      obsClient.call('GetTransitionList').catch(() => ({ transitions: [] })),
-      obsClient.call('GetStreamStatus').catch(() => ({ outputActive: false, streaming: false })),
-      obsClient.call('GetRecordStatus').catch(() => ({ outputActive: false, recording: false }))
-    ]);
-
-    const scenes = Array.isArray(sceneList?.scenes) ? sceneList.scenes.map((scene) => scene.name || scene.sceneName || scene).filter(Boolean) : [];
-    const transitions = Array.isArray(transitionList?.transitions) ? transitionList.transitions.map((transition) => transition.name || transition.transitionName || transition).filter(Boolean) : [];
-    const currentSceneName = sceneList?.currentProgramSceneName || sceneList?.currentSceneName || state.obs.currentScene;
-    const streamActive = !!(streamStatus?.outputActive || streamStatus?.streaming || streamStatus?.isStreaming);
-    const recordingActive = !!(recordStatus?.outputActive || recordStatus?.recording || recordStatus?.isRecording);
-
-    state.obs.scenes = scenes;
-    state.obs.transitions = transitions;
-    state.obs.currentScene = currentSceneName || 'Unknown';
-    state.obs.streamState = streamActive ? 'live' : 'offline';
-    state.obs.recordingState = recordingActive ? 'recording' : 'off';
-    state.obs.currentTransition = transitionList?.currentTransition || state.obs.currentTransition || '';
-    broadcastState();
-  } catch (error) {
-    console.error('OBS refresh error:', error);
-    state.obs.lastError = error.message || 'Unable to refresh OBS state';
-    broadcastState();
   }
+  return null;
 }
 
-async function connectObs(config = {}) {
-  const host = sanitizeText(config.host || process.env.OBS_HOST || '', '');
-  const port = sanitizeText(config.port || process.env.OBS_PORT || '', '');
-  const password = sanitizeText(config.password || process.env.OBS_PASSWORD || '', '');
-  const previewUrl = sanitizeText(config.previewUrl || process.env.OBS_PREVIEW_URL || '', '');
+function getHTMLPage(pageName) {
+  const possiblePaths = [
+    path.join(__dirname, 'public', pageName),
+    path.join(__dirname, pageName)
+  ];
 
-  if (!host || !port) {
-    state.obs.connected = false;
-    state.obs.lastError = 'OBS host and port are required';
-    addActivity('OBS configuration incomplete', 'Host and port are required.');
-    broadcastState();
-    return { connected: false, error: 'OBS host and port are required' };
-  }
-
-  state.obs.host = host;
-  state.obs.port = port;
-  state.obs.password = password;
-  state.obs.previewUrl = previewUrl;
-
-  try {
-    if (obsClient && obsClient.connected) {
-      await obsClient.disconnect();
+  for (const filePath of possiblePaths) {
+    if (fs.existsSync(filePath)) {
+      return filePath;
     }
-
-    obsClient = new OBSWebSocket();
-    obsClient.on('ConnectionOpened', () => {
-      state.obs.connected = true;
-      state.obs.connectedAt = new Date().toISOString();
-      state.obs.lastError = '';
-      addActivity('OBS connected', `Connected to ${host}:${port}`);
-      broadcastState();
-    });
-
-    obsClient.on('ConnectionClosed', () => {
-      state.obs.connected = false;
-      state.obs.lastError = 'OBS connection closed';
-      addActivity('OBS disconnected', 'The server lost the OBS WebSocket connection.');
-      broadcastState();
-    });
-
-    obsClient.on('error', (error) => {
-      state.obs.connected = false;
-      state.obs.lastError = error?.message || 'OBS error';
-      addActivity('OBS error', state.obs.lastError);
-      broadcastState();
-    });
-
-    obsClient.on('CurrentProgramSceneChanged', async (event) => {
-      if (event?.sceneName) {
-        state.obs.currentScene = event.sceneName;
-        addActivity('OBS scene changed', event.sceneName);
-        broadcastState();
-      }
-    });
-
-    obsClient.on('StreamStateChanged', async (event) => {
-      const liveState = event?.outputActive || event?.streaming || event?.state === 'OBS_WEBSOCKET_OUTPUT_STARTED' ? 'live' : 'offline';
-      state.obs.streamState = liveState;
-      addActivity('Stream state changed', liveState);
-      broadcastState();
-    });
-
-    obsClient.on('RecordStateChanged', async (event) => {
-      const recordState = event?.outputActive || event?.recording || event?.state === 'OBS_WEBSOCKET_OUTPUT_STARTED' ? 'recording' : 'off';
-      state.obs.recordingState = recordState;
-      addActivity('Recording state changed', recordState);
-      broadcastState();
-    });
-
-    obsClient.on('SceneListChanged', async () => {
-      await updateObsState();
-    });
-
-    await obsClient.connect(`ws://${host}:${port}`, password || undefined);
-    await updateObsState();
-    return { connected: true, message: 'OBS connected successfully' };
-  } catch (error) {
-    state.obs.connected = false;
-    state.obs.lastError = error?.message || 'Connection failed';
-    addActivity('OBS connection failed', state.obs.lastError);
-    broadcastState();
-    return { connected: false, error: state.obs.lastError };
   }
+  return null;
 }
 
-async function takeObsScene(sceneName, options = {}) {
-  if (!obsClient || !state.obs.connected || !sceneName) {
-    return { ok: false, message: 'OBS is not connected or no scene was selected.' };
-  }
-
-  try {
-    const transitionName = sanitizeText(state.obs.currentTransition || '', '');
-    if (transitionName) {
-      await obsClient.call('SetCurrentTransition', { transitionName });
-      await obsClient.call('TransitionToProgram');
-    }
-
-    await obsClient.call('SetCurrentScene', { sceneName });
-    state.obs.currentScene = sceneName;
-    if (!options.silent) {
-      addActivity('Camera taken to program', sceneName);
-    }
-    broadcastState();
-    return { ok: true, message: `Program scene changed to ${sceneName}` };
-  } catch (error) {
-    state.obs.lastError = error.message || 'Could not switch the scene in OBS';
-    addActivity('OBS scene request failed', state.obs.lastError);
-    broadcastState();
-    return { ok: false, message: state.obs.lastError };
-  }
-}
-
-async function startStream() {
-  if (!obsClient || !state.obs.connected) {
-    return { ok: false, message: 'OBS is not connected.' };
-  }
-
-  try {
-    await obsClient.call('StartStream');
-    state.obs.streamState = 'live';
-    addActivity('Stream started', 'OBS confirmed the stream started.');
-    broadcastState();
-    return { ok: true, message: 'Stream started.' };
-  } catch (error) {
-    state.obs.lastError = error.message || 'Could not start the stream';
-    addActivity('Stream start failed', state.obs.lastError);
-    broadcastState();
-    return { ok: false, message: state.obs.lastError };
-  }
-}
-
-async function stopStream() {
-  if (!obsClient || !state.obs.connected) {
-    return { ok: false, message: 'OBS is not connected.' };
-  }
-
-  try {
-    await obsClient.call('StopStream');
-    state.obs.streamState = 'offline';
-    addActivity('Stream stopped', 'OBS confirmed the stream stopped.');
-    broadcastState();
-    return { ok: true, message: 'Stream stopped.' };
-  } catch (error) {
-    state.obs.lastError = error.message || 'Could not stop the stream';
-    addActivity('Stream stop failed', state.obs.lastError);
-    broadcastState();
-    return { ok: false, message: state.obs.lastError };
-  }
-}
-
-async function startRecording() {
-  if (!obsClient || !state.obs.connected) {
-    return { ok: false, message: 'OBS is not connected.' };
-  }
-
-  try {
-    await obsClient.call('StartRecord');
-    state.obs.recordingState = 'recording';
-    addActivity('Recording started', 'OBS confirmed recording started.');
-    broadcastState();
-    return { ok: true, message: 'Recording started.' };
-  } catch (error) {
-    state.obs.lastError = error.message || 'Could not start recording';
-    addActivity('Recording start failed', state.obs.lastError);
-    broadcastState();
-    return { ok: false, message: state.obs.lastError };
-  }
-}
-
-async function stopRecording() {
-  if (!obsClient || !state.obs.connected) {
-    return { ok: false, message: 'OBS is not connected.' };
-  }
-
-  try {
-    await obsClient.call('StopRecord');
-    state.obs.recordingState = 'off';
-    addActivity('Recording stopped', 'OBS confirmed recording stopped.');
-    broadcastState();
-    return { ok: true, message: 'Recording stopped.' };
-  } catch (error) {
-    state.obs.lastError = error.message || 'Could not stop recording';
-    addActivity('Recording stop failed', state.obs.lastError);
-    broadcastState();
-    return { ok: false, message: state.obs.lastError };
-  }
-}
-
-function ensureUserPayload(payload = {}) {
-  const name = sanitizeText(payload.name || '', '');
-  const department = sanitizeText(payload.department || '', '');
-
-  if (!name) {
-    throw new Error('A name is required');
-  }
-
-  if (!DEPARTMENTS.includes(department)) {
-    throw new Error('Department is invalid');
-  }
-
-  return { name, department };
-}
-
+// Middleware
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// Serve frontend assets from the public folder, with a root fallback for non-public files.
-app.use(express.static(path.join(__dirname, 'public')));
+// Static file serving
+if (fs.existsSync(path.join(__dirname, 'public'))) {
+  app.use(express.static(path.join(__dirname, 'public')));
+}
 app.use(express.static(__dirname));
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-app.get('*', (req, res, next) => {
-  const entryFile = path.join(__dirname, 'public', 'index.html');
-  res.sendFile(entryFile, (error) => {
-    if (error) {
-      next(error);
-    }
-  });
-});
-
+// --- SPECIFIC ROUTES FIRST ---
 app.get('/director', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'director.html'));
-});
-
-app.get('/director.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'director.html'));
+  const page = getHTMLPage('director.html');
+  if (page) return res.sendFile(page);
+  res.status(404).send('director.html not found.');
 });
 
 app.get('/control-room', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'director.html'));
+  const page = getHTMLPage('director.html');
+  if (page) return res.sendFile(page);
+  res.status(404).send('director.html not found.');
 });
 
 app.get('/obs-output', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'obs-output.html'));
-});
-
-app.get('/obs-output.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'obs-output.html'));
+  const page = getHTMLPage('obs-output.html');
+  if (page) return res.sendFile(page);
+  res.status(404).send('obs-output.html not found.');
 });
 
 app.get('/director/session', (req, res) => {
@@ -529,324 +245,78 @@ app.get('/api/program-state', (req, res) => {
   res.json({ programOutput: state.programOutput });
 });
 
-app.post('/api/obs/connect', async (req, res) => {
-  const result = await connectObs(req.body || {});
-  if (result.connected) {
-    return res.json({ success: true, message: 'OBS connection successful.' });
+// --- CATCH-ALL ROUTE LAST ---
+app.get('*', (req, res) => {
+  const entryPath = getEntryPoint();
+  if (entryPath) {
+    return res.sendFile(entryPath);
   }
-  return res.status(400).json({ success: false, message: result.error || 'Unable to connect to OBS.' });
+  res.status(404).send('Main index.html file not found.');
 });
 
+// Socket.IO Handlers
 io.on('connection', (socket) => {
   socket.emit('state:update', getStatePayload());
 
   socket.on('join:team', (payload) => {
-    try {
-      const userPayload = ensureUserPayload(payload);
-      const existingIndex = state.users.findIndex((user) => user.socketId === socket.id);
-      const user = {
-        socketId: socket.id,
-        name: userPayload.name,
-        department: userPayload.department,
-        connected: true,
-        joinedAt: new Date().toISOString()
-      };
+    const name = sanitizeText(payload?.name || '', '');
+    const department = sanitizeText(payload?.department || '', 'Other');
 
-      if (existingIndex >= 0) {
-        state.users[existingIndex] = user;
-      } else {
-        state.users.push(user);
-      }
-
-      addActivity('User joined', `${user.name} (${user.department}) joined the production team.`);
-      broadcastState();
-      socket.emit('team:joined', { success: true, message: 'Welcome to the live production workspace.' });
-    } catch (error) {
-      socket.emit('error:message', { message: error.message || 'Unable to join the team.' });
+    if (!name) {
+      return socket.emit('error:message', { message: 'A name is required.' });
     }
-  });
 
-  socket.on('disconnect', () => {
-    const user = state.users.find((member) => member.socketId === socket.id);
-    if (user) {
-      const index = state.users.findIndex((member) => member.socketId === socket.id);
-      if (index >= 0) {
-        state.users.splice(index, 1);
-      }
-      addActivity('User disconnected', `${user.name} disconnected from the team.`);
-      broadcastState();
-    }
+    const user = {
+      socketId: socket.id,
+      name,
+      department,
+      connected: true,
+      joinedAt: new Date().toISOString()
+    };
+
+    state.users.push(user);
+    addActivity('User joined', `${name} (${department}) joined.`);
+    broadcastState();
   });
 
   socket.on('send:message', (payload) => {
-    const sender = state.users.find((member) => member.socketId === socket.id);
     const messageText = sanitizeText(payload?.message || '', '');
-    if (!messageText) {
-      socket.emit('error:message', { message: 'Message cannot be empty.' });
-      return;
-    }
+    if (!messageText) return;
 
-    const message = {
+    const sender = state.users.find((m) => m.socketId === socket.id);
+    state.messages.push({
       id: Date.now().toString(16),
       sender: sender ? sender.name : 'Unknown',
       department: sender ? sender.department : 'Other',
       message: messageText,
       timestamp: new Date().toISOString()
-    };
-
-    state.messages.push(message);
-    addActivity('Team message sent', `${message.sender} sent a message to the director.`);
+    });
     broadcastState();
   });
 
   socket.on('send:announcement', (payload) => {
     const text = sanitizeText(payload?.text || '', '');
-    if (!text) {
-      socket.emit('error:message', { message: 'Announcement cannot be empty.' });
-      return;
-    }
+    if (!text) return;
 
     state.announcement = {
       id: Date.now().toString(16),
       text,
-      timestamp: new Date().toISOString(),
-      author: 'Director'
-    };
-    addActivity('Announcement sent', text);
-    broadcastState();
-  });
-
-  socket.on('send:instruction', (payload) => {
-    const target = sanitizeText(payload?.target || 'Everyone', 'Everyone');
-    const text = sanitizeText(payload?.text || '', '');
-    if (!text) {
-      socket.emit('error:message', { message: 'Instruction cannot be empty.' });
-      return;
-    }
-
-    const instruction = {
-      id: Date.now().toString(16),
-      target,
-      text,
-      createdAt: new Date().toISOString(),
-      acknowledgedBy: []
-    };
-
-    state.instructions.push(instruction);
-    addActivity('Instruction sent', `${target}: ${text}`);
-    broadcastState();
-  });
-
-  socket.on('send:alert', (payload) => {
-    const title = sanitizeText(payload?.title || 'URGENT', 'URGENT');
-    const text = sanitizeText(payload?.message || '', '');
-    if (!text) {
-      socket.emit('error:message', { message: 'Alert message cannot be empty.' });
-      return;
-    }
-
-    const alert = {
-      id: Date.now().toString(16),
-      title,
-      message: text,
       timestamp: new Date().toISOString()
     };
-
-    state.urgentAlerts.push(alert);
-    addActivity('Urgent alert sent', `${title}: ${text}`);
+    addActivity('Announcement updated', text);
     broadcastState();
   });
 
-  socket.on('acknowledge:instruction', (payload) => {
-    const instructionId = sanitizeText(payload?.instructionId || '', '');
-    const user = state.users.find((member) => member.socketId === socket.id);
-    if (!instructionId || !user) {
-      return;
-    }
-
-    const instruction = state.instructions.find((item) => item.id === instructionId);
-    if (!instruction) return;
-
-    const alreadyAcknowledged = instruction.acknowledgedBy.some((entry) => entry.socketId === socket.id);
-    if (!alreadyAcknowledged) {
-      instruction.acknowledgedBy.push({
-        socketId: socket.id,
-        name: user.name,
-        department: user.department,
-        acknowledgedAt: new Date().toISOString()
-      });
-      addActivity('Instruction acknowledged', `${user.name} acknowledged: ${instruction.text}`);
+  socket.on('disconnect', () => {
+    const index = state.users.findIndex((m) => m.socketId === socket.id);
+    if (index >= 0) {
+      const removed = state.users.splice(index, 1)[0];
+      addActivity('User disconnected', `${removed.name} disconnected.`);
       broadcastState();
     }
-  });
-
-  socket.on('program:status:set', (payload) => {
-    const status = sanitizeText(payload?.status || '', '');
-    if (!PROGRAM_STATUSES.includes(status)) {
-      socket.emit('error:message', { message: 'Invalid program status selected.' });
-      return;
-    }
-
-    state.programStatus = status;
-    addActivity('Program status changed', status);
-    syncProgramSceneToStatus(status);
-    broadcastState();
-  });
-
-  socket.on('countdown:control', (payload) => {
-    const action = sanitizeText(payload?.action || '', '');
-    const value = Number(payload?.value || state.countdown.duration || 60);
-
-    if (action === 'set-duration') {
-      state.countdown.duration = Math.max(1, value);
-      state.countdown.remaining = Math.max(1, value);
-      addActivity('Countdown duration updated', `${state.countdown.duration}s`);
-      broadcastState();
-      return;
-    }
-
-    if (action === 'start') {
-      state.countdown.running = true;
-      state.countdown.startedAt = Date.now();
-      state.countdown.startedBy = 'Director';
-      addActivity('Countdown started', `${state.countdown.duration}s`);
-      broadcastState();
-      return;
-    }
-
-    if (action === 'pause') {
-      state.countdown.running = false;
-      state.countdown.remaining = Math.max(0, state.countdown.remaining);
-      addActivity('Countdown paused', `${state.countdown.remaining}s remaining`);
-      broadcastState();
-      return;
-    }
-
-    if (action === 'reset') {
-      state.countdown.running = false;
-      state.countdown.remaining = state.countdown.duration;
-      state.countdown.startedAt = null;
-      addActivity('Countdown reset', `${state.countdown.duration}s`);
-      broadcastState();
-    }
-  });
-
-  socket.on('obs:config:update', async (payload) => {
-    const result = await connectObs(payload || {});
-    socket.emit('obs:config:result', result);
-  });
-
-  socket.on('obs:scene:take', async (payload) => {
-    const sceneName = sanitizeText(payload?.sceneName || '', '');
-    const result = await takeObsScene(sceneName, { silent: false });
-    socket.emit('obs:scene:result', result);
-  });
-
-  socket.on('program:preview:set', (payload) => {
-    const selectedKey = sanitizeText(payload?.cameraKey || '', 'camera1');
-    updateProgramOutput(selectedKey, 'Preview');
-    socket.emit('program:state', getStatePayload().programOutput);
-  });
-
-  socket.on('program:take', (payload) => {
-    const selectedKey = sanitizeText(payload?.cameraKey || '', 'camera1');
-    updateProgramOutput(selectedKey, 'Take');
-    socket.emit('program:state', getStatePayload().programOutput);
-  });
-
-  socket.on('program:cut', (payload) => {
-    const selectedKey = sanitizeText(payload?.cameraKey || '', 'camera1');
-    updateProgramOutput(selectedKey, 'Cut');
-    socket.emit('program:state', getStatePayload().programOutput);
-  });
-
-  socket.on('camera:take', async (payload) => {
-    const cameraKey = sanitizeText(payload?.cameraKey || '', 'camera1');
-    const safeKey = CAMERA_KEYS.includes(cameraKey) ? cameraKey : 'camera1';
-    const mapName = state.obs.cameraMappings[safeKey];
-    if (!mapName) {
-      updateProgramOutput(safeKey, 'Take');
-      socket.emit('camera:result', { ok: true, message: `Preview set to ${getCameraLabel(safeKey)}. Configure an OBS mapping to send it to OBS.` });
-      return;
-    }
-
-    const result = await takeObsScene(mapName, { silent: false });
-    if (result.ok) {
-      updateProgramOutput(safeKey, 'Take');
-    }
-    socket.emit('camera:result', result);
-  });
-
-  socket.on('obs:stream:start', async () => {
-    const result = await startStream();
-    socket.emit('obs:stream:result', result);
-  });
-
-  socket.on('obs:stream:stop', async () => {
-    const result = await stopStream();
-    socket.emit('obs:stream:result', result);
-  });
-
-  socket.on('obs:recording:start', async () => {
-    const result = await startRecording();
-    socket.emit('obs:recording:result', result);
-  });
-
-  socket.on('obs:recording:stop', async () => {
-    const result = await stopRecording();
-    socket.emit('obs:recording:result', result);
-  });
-
-  socket.on('obs:refresh', async () => {
-    await updateObsState();
-    socket.emit('obs:refresh:result', { connected: state.obs.connected, message: 'OBS state refreshed.' });
-  });
-
-  socket.on('settings:camera-map', (payload) => {
-    const map = payload || {};
-    const newMap = {};
-    Object.keys(state.obs.cameraMappings).forEach((cameraKey) => {
-      const value = sanitizeText(map[cameraKey] || '', '');
-      newMap[cameraKey] = value;
-    });
-    state.obs.cameraMappings = newMap;
-    addActivity('Camera mapping updated', JSON.stringify(newMap));
-    broadcastState();
-  });
-
-  socket.on('settings:scene-map', (payload) => {
-    const values = payload || {};
-    const newMap = {};
-    Object.keys(state.obs.sceneMappings).forEach((statusKey) => {
-      const value = sanitizeText(values[statusKey] || '', '');
-      newMap[statusKey] = value;
-    });
-    state.obs.sceneMappings = newMap;
-    addActivity('Program scene mapping updated', JSON.stringify(newMap));
-    broadcastState();
-  });
-
-  socket.on('settings:auto-scene-switch', (payload) => {
-    state.obs.autoSceneSwitch = !!payload?.enabled;
-    addActivity('Automatic scene switching', state.obs.autoSceneSwitch ? 'enabled' : 'disabled');
-    broadcastState();
-  });
-
-  socket.on('settings:transition', (payload) => {
-    const transitionName = sanitizeText(payload?.transitionName || '', '');
-    state.obs.currentTransition = transitionName;
-    addActivity('OBS transition selected', transitionName || 'No transition selected');
-    broadcastState();
   });
 });
 
-if (require.main === module) {
-  server.listen(PORT, () => {
-    console.log(`CHURCH LIVE STUDIO server running on http://localhost:${PORT}`);
-    if (DIRECTOR_PASSWORD === 'change-me') {
-      console.warn('WARNING: DIRECTOR_PASSWORD remains at default value. Update your .env file before deployment.');
-    }
-  });
-}
-
-module.exports = { app, server, io, state, connectObs, takeObsScene, startStream, stopStream, startRecording, stopRecording, updateObsState };
+server.listen(PORT, () => {
+  console.log(`CHURCH LIVE STUDIO server running on port ${PORT}`);
+});
