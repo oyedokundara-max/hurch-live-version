@@ -3,77 +3,103 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="refresh" content="0; url=/director">
-  <title>Church Live Studio</title>
-  <script>
-    window.location.href = "/director";
-  </script>
-  <style>
-    body {
-      font-family: system-ui, -apple-system, sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      margin: 0;
-      background-color: #121212;
-      color: #ffffff;
-    }
-    .card {
-      text-align: center;
-      padding: 2.5rem;
-      border-radius: 12px;
-      background: #1e1e1e;
-      border: 1px solid #333;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-      max-width: 400px;
-      width: 90%;
-    }
-    h1 {
-      margin-top: 0;
-      font-size: 1.5rem;
-      color: #f3f4f6;
-    }
-    p {
-      color: #9ca3af;
-      font-size: 0.95rem;
-    }
-    .links {
-      margin-top: 1.5rem;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    a {
-      display: block;
-      padding: 10px 16px;
-      background-color: #2563eb;
-      color: #ffffff;
-      text-decoration: none;
-      border-radius: 6px;
-      font-weight: 600;
-      transition: background 0.2s;
-    }
-    a:hover {
-      background-color: #1d4ed8;
-    }
-    a.secondary {
-      background-color: #374151;
-    }
-    a.secondary:hover {
-      background-color: #4b5563;
-    }
-  </style>
+  <title>Church Live Studio | RCCG Christ The Way</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
-  <div class="card">
-    <h1>Church Live Studio</h1>
-    <p>Redirecting you to the Director Control Room...</p>
-    <div class="links">
-      <a href="/director">Go to Director Panel</a>
-      <a href="/obs-output" class="secondary">Go to OBS Output Feed</a>
+  <!-- Join Overlay -->
+  <div id="join-modal" class="modal-overlay">
+    <div class="modal-card">
+      <h2>CHURCH LIVE STUDIO</h2>
+      <h3>RCCG Christ The Way</h3>
+      <p>Enter your details to join the live production session</p>
+      <form id="join-form">
+        <div class="form-group">
+          <label for="user-name">Your Full Name</label>
+          <input type="text" id="user-name" placeholder="e.g. Brother John" required>
+        </div>
+        <div class="form-group">
+          <label for="user-dept">Department / Role</label>
+          <select id="user-dept" required>
+            <option value="Director">Director</option>
+            <option value="Camera">Camera</option>
+            <option value="Audio">Audio</option>
+            <option value="Projection">Projection</option>
+            <option value="Streaming">Streaming</option>
+            <option value="Media">Media</option>
+            <option value="Lighting">Lighting</option>
+            <option value="Technical">Technical</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+        <button type="submit" class="btn btn-primary full-width">Join Session</button>
+      </form>
     </div>
   </div>
+
+  <!-- Main Workspace -->
+  <div class="app-header">
+    <div class="header-brand">
+      <h1>CHURCH LIVE STUDIO</h1>
+      <span class="sub-brand">RCCG Christ The Way</span>
+    </div>
+    <div class="header-status">
+      <span id="live-clock" class="clock">00:00:00</span>
+      <span id="socket-status" class="badge badge-offline">Connecting...</span>
+    </div>
+  </div>
+
+  <div class="container grid-layout">
+    <!-- Urgent Alert Panel -->
+    <div id="urgent-alert-panel" class="alert-banner" style="display: none;">
+      <span class="alert-title">⚠ URGENT ALERT</span>
+      <span id="urgent-alert-text" class="alert-body">---</span>
+    </div>
+
+    <!-- Status & Output Monitor -->
+    <div class="card col-2">
+      <h2>PROGRAM MONITOR</h2>
+      <div class="monitor-wrapper aspect-16-9">
+        <div id="active-feed" class="feed-placeholder">
+          <div id="camera-label" class="feed-title">CAMERA 1</div>
+          <span class="live-indicator">● LIVE</span>
+        </div>
+      </div>
+      <div class="status-bar">
+        <span>STATUS: <strong id="prog-status" class="text-gold">Not Started</strong></span>
+        <span>OBS: <strong id="obs-status" class="text-muted">Disconnected</strong></span>
+      </div>
+    </div>
+
+    <!-- Target Instructions Panel -->
+    <div class="card">
+      <h2>INSTRUCTIONS & ALERTS</h2>
+      <div id="announcement-box" class="announcement-card">
+        <strong>ANNOUNCEMENT:</strong> <span id="announcement-text">No active announcement</span>
+      </div>
+      <div id="instructions-list" class="instructions-container">
+        <!-- Dynamically Populated -->
+      </div>
+    </div>
+
+    <!-- Team Messages & Communication -->
+    <div class="card">
+      <h2>MESSAGE DIRECTOR</h2>
+      <div id="message-history" class="message-history"></div>
+      <form id="message-form" class="flex-row gap-10">
+        <input type="text" id="message-input" placeholder="Type message to director..." required>
+        <button type="submit" class="btn btn-primary">Send</button>
+      </form>
+    </div>
+
+    <!-- Online Roster -->
+    <div class="card">
+      <h2>ACTIVE PRODUCTION TEAM</h2>
+      <ul id="team-list" class="team-roster"></ul>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
 </body>
 </html>
