@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OBS Output Feed</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      font-family: system-ui, -apple-system, sans-serif;
+      overflow: hidden;
+    }
+    .overlay-container {
+      position: absolute;
+      bottom: 40px;
+      left: 40px;
+      background: rgba(15, 23, 42, 0.9);
+      color: #ffffff;
+      padding: 16px 24px;
+      border-left: 6px solid #2563eb;
+      border-radius: 4px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+      display: none;
+    }
+    .overlay-title {
+      font-size: 1.2rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #60a5fa;
+    }
+    .overlay-text {
+      font-size: 1rem;
+      margin-top: 4px;
+      color: #e2e8f0;
+    }
+  </style>
+</head>
+<body>
+  <div id="lower-third" class="overlay-container">
+    <div class="overlay-title" id="announcement-title">Announcement</div>
+    <div class="overlay-text" id="announcement-body">Welcome to Church Live Studio</div>
+  </div>
+
+  <script>
+    const socket = io();
+
+    socket.on('state:update', (state) => {
+      const lowerThird = document.getElementById('lower-third');
+      if (state.announcement && state.announcement.text) {
+        document.getElementById('announcement-body').textContent = state.announcement.text;
+        lowerThird.style.display = 'block';
+      } else {
+        lowerThird.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>
